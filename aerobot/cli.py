@@ -86,4 +86,7 @@ def train(results_path:str, data_dir:str=DATA_DIR, plot:bool=True):
     print(f'train: Saved trained model to {model_path}')
 
 
+def config():
+    pass 
+
 
