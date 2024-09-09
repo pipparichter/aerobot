@@ -1,1 +1,4 @@
 aerobot/data/*.h5
+build
+aerobot.egg-info
+data

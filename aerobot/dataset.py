@@ -1,15 +1,9 @@
 from typing import List
-from aerobot.utils import AMINO_ACIDS, NUCLEOTIDES
+from aerobot.utils import get_aa_kmers, get_nt_kmers
 import itertools
 import re
-
-def get_aa_kmers(k:int):
-    aa_kmers = [''.join(i) for i in itertools.product(AMINO_ACIDS, repeat=k)]
-    return sorted(aa_kmers)
-
-def get_nt_kmers(k:int):
-    nt_kmers = [''.join(i) for i in itertools.product(NUCLEOTIDES, repeat=k)]
-    return sorted(nt_kmers)
+import pandas as pd 
+import numpy as np 
 
 
 class FeatureDataset():
@@ -21,7 +15,7 @@ class FeatureDataset():
         self.k = int(k[0])
 
         if labels is not None:
-            features, self.labels = features.align(self.labels, join='left', axis=0)
+            features, self.labels = features.align(labels, join='left', axis=0)
         else:
             self.labels = None
 
@@ -30,17 +24,20 @@ class FeatureDataset():
         features = features.drop(columns=[col for col in features.columns if col not in kmers])
         missing_features = pd.DataFrame(0, index=features.index, columns=[kmer for kmer in kmers if (kmer not in features.columns)])
         features = pd.concat([features, missing_features], axis=1)
-        self.features = features[[kmers]] # Make sure the ordering is consistent.
+        self.index = features.index
+        self.features = features[kmers] # Make sure the ordering is consistent.
         self.dim = len(kmers) # Set the number of features. 
 
         if normalize:
             self.features = self.features.apply(lambda row : row / row.sum(), axis=1)
 
-    def from_csv(self, path:str, feature_type:str=None, index_col:str='genome_id'):
+    @classmethod
+    def from_csv(cls, path:str, feature_type:str=None, index_col:str='genome_id', normalize:bool=True):
         features = pd.read_csv(path).set_index(index_col)
         return FeatureDataset(features, labels=None, feature_type=feature_type)
 
-    def from_hdf(self, path:str, feature_type:str=None):
+    @classmethod
+    def from_hdf(cls, path:str, feature_type:str=None, normalize:bool=True):
         with pd.HDFStore(path, 'r') as store:
             features = store.get(feature_type)
             labels = store.get('labels') if '/labels' in store.keys() else None
@@ -52,7 +49,7 @@ class FeatureDataset():
             labels = self.labels['binary'].values if binary else self.labels['ternary'].values
         else:
             labels = None
-        return features.values, labels
+        return self.features.values, labels
 
 
 

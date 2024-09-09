@@ -4,26 +4,27 @@ import os
 import numpy as np 
 import pickle
 from sklearn.metrics import balanced_accuracy_score 
-import tensorflow as tf
-from utils import Unpickler
-
+from aerobot.utils import Unpickler
+from typing import Tuple
+import sklearn
+import copy
+from tqdm import tqdm
 
 class WeightedMSELoss(torch.nn.Module):
 
     def __init__(self):
 
         super(WeightedMSELoss, self).__init__()
-        self.weights = np.ones(n_classes)
+        self.weights = 1
         # self.n_classes = n_classes
         self.categories = None
 
     def fit(self, y:np.ndarray, categories:np.ndarray=None):
         '''Compute the weights to use based on the frequencies of each class in the input Dataset.'''
         # Compute loss weights as the inverse frequency.
-        self.weights = [1 / (np.sum(y == c) / len(y)) for c in categories] 
+        self.weights = torch.FloatTensor([1 / (np.sum(y == c) / len(y)) for c in categories])
 
     def forward(self, outputs:torch.FloatTensor, targets:torch.FloatTensor) -> torch.FloatTensor:
-        '''Update the internal states keeping track of the loss.'''
         return torch.mean((outputs - targets)**2 * self.weights)
 
 
@@ -40,9 +41,9 @@ class Classifier(torch.nn.Module):
             torch.nn.Linear(input_dim, hidden_dim),
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_dim, output_dim),
-            torch.nn.Softmax(dim=1)).to(device)
+            torch.nn.Softmax(dim=1)).to(self.device)
 
-        self.loss_func = WeightedMSELoss(n_classes=output_dim)
+        self.loss_func = WeightedMSELoss()
         self.scaler = sklearn.preprocessing.StandardScaler()
         self.encoder = sklearn.preprocessing.OneHotEncoder(handle_unknown='error', sparse_output=False)
         self.n_classes = output_dim
@@ -51,7 +52,7 @@ class Classifier(torch.nn.Module):
         # X = torch.FloatTensor(X).to(self.device) # Convert numpy array to Tensor. Make sure it is on the GPU, if available.
         outputs = self.classifier(X)
         if one_hot:
-            outputs = tf.one_hot(tf.argmax(t, dimension=1), depth=self.n_classes)
+            outputs = torch.nn.functional.one_hot(torch.argmax(outputs, axis=1), num_classes=self.n_classes)
         return outputs
 
     @staticmethod
@@ -59,7 +60,7 @@ class Classifier(torch.nn.Module):
         '''Create batches of size batch_size from training data and labels.'''
         # Don't bother with balanced batches. Doesn't help much with accuracy anyway.
         n_batches = len(X) // batch_size + 1
-        return np.tensor_split(X, n_batches, axis=0), np.tensor_split(y, n_batches, axis=0)
+        return torch.tensor_split(X, n_batches, axis=0), torch.tensor_split(y, n_batches, axis=0)
 
     @staticmethod
     def shuffle(X:torch.FloatTensor, y:torch.FloatTensor) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
@@ -73,7 +74,7 @@ class Classifier(torch.nn.Module):
         training data.'''
         assert type(y[0]) == str, f'Classifier._fit: Input target values must be string labels, not {y.dtype}.'
         self.encoder.fit(y.reshape(-1, 1))
-        self.loss_func.fit(y, categories=self.self.encoder.categories_[0])
+        self.loss_func.fit(y, categories=self.encoder.categories_[0])
         self.scaler.fit(X)
 
     def _preprocess(self, X:np.ndarray, y:np.ndarray=None) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
@@ -94,6 +95,14 @@ class Classifier(torch.nn.Module):
         y = self.encoder.inverse_transform(y).ravel()
         return balanced_accuracy_score(y, y_pred)
 
+    def accuracy(self, X:np.ndarray, y:np.ndarray) -> float:
+        '''Compute the balanced accuracy score based on model outputs and dataset labels (strings).'''
+        X, _ = self._preprocess(X) # Standardize the input features. 
+        y_pred = self(X, one_hot=True).cpu().detach().numpy()
+        y_pred = self.encoder.inverse_transform(y_pred).ravel() # Convert one-hot encoded array to labels. 
+        return balanced_accuracy_score(y, y_pred)
+
+
     def fit(self, X:np.ndarray, y:np.ndarray, X_val:np.ndarray, y_val:np.ndarray,
             lr:float=0.001, 
             batch_size:int=16,
@@ -111,25 +120,24 @@ class Classifier(torch.nn.Module):
         self.train() # Classifier in train mode. 
 
         train_losses, val_accs = [], []
-        pbar = tqdm(total=epochs, desc='Classifier.fit: Training Classifier...')
+        pbar = tqdm(list(range(epochs)), desc='Classifier.fit: Training Classifier...')
         for epoch in pbar:
             X, y = Classifier.shuffle(X, y) # Shuffle the transformed data.
             batch_losses = [] 
             for X_batch, y_batch in zip(*Classifier.get_batches(X, y)):
-                loss = self.loss_func(X_batch, self(X_batch, one_hot=False))
+                loss = self.loss_func(self(X_batch, one_hot=False), y_batch)
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
                 batch_losses.append(loss.item())      
-            train_losses.append(torch.mean(batch_losses)) # Store the average weighted train losses over the epoch. 
+            train_losses.append(np.mean(batch_losses)) # Store the average weighted train losses over the epoch. 
             val_accs.append(self._accuracy(X_val, y_val)) # Store model accuracy on the validation dataset. 
 
             if val_accs[-1] >= max(val_accs):
                 best_epoch = epoch
                 best_model_weights = copy.deepcopy(self.state_dict())
-                
-            pbar.update(1)
-            pbar.set_description(f'Classifier.fit: Training Classifier... best validation accuracy {max(val_accs)} encountered at epoch {best_epoch}.')
+
+            pbar.set_description(f'Classifier.fit: Training Classifier... best validation accuracy {np.round(max(val_accs), 2)} encountered at epoch {best_epoch}.')
             
 
         self.load_state_dict(best_model_weights) # Load the best enountered model weights.

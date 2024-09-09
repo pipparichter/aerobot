@@ -3,16 +3,29 @@ from typing import List
 import pandas as pd 
 import numpy as np 
 import json 
+import pickle
+from aerobot import data
+from aerobot import models
+import itertools
+import torch
+import io
+import pandas as pd 
 
-
-DATA_DIR = './aerobot/data'
-RESULTS_DIR = './aerobot/results'
-MODELS_DIR = './aerobot/models'
+MODELS_DIR = os.path.dirname(os.path.abspath(models.__file__))
+DATA_DIR = os.path.dirname(os.path.abspath(data.__file__))
 
 AMINO_ACIDS = ['A', 'R', 'N', 'D', 'C', 'E', 'Q', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V', 'U']
 NUCLEOTIDES = ['A', 'C', 'T', 'G']
 
 FEATURE_TYPES = [f'nt_{i}mer' for i in range(1, 6)] + [f'aa_{i}mer' for i in range(1, 4)]
+
+def get_aa_kmers(k:int):
+    aa_kmers = [''.join(i) for i in itertools.product(AMINO_ACIDS, repeat=k)]
+    return sorted(aa_kmers)
+
+def get_nt_kmers(k:int):
+    nt_kmers = [''.join(i) for i in itertools.product(NUCLEOTIDES, repeat=k)]
+    return sorted(nt_kmers)
 
 class Unpickler(pickle.Unpickler):
     '''For un-pickling models which were trained on GPUs. See https://github.com/pytorch/pytorch/issues/16797'''
